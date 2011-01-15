@@ -1,0 +1,10 @@
+; $Id: project_git_instructions.info,v 1.3 2011/01/12 07:36:02 helmo Exp $
+name = Git instructions
+description = Adds a tab with Git instructions customized for each project.
+core = 6.x
+package = Project
+dependencies[] = project
+dependencies[] = versioncontrol
+dependencies[] = versioncontrol_git
+dependencies[] = versioncontrol_project
+;

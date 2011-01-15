@@ -1,0 +1,294 @@
+<?php
+// $Id: project_git_instructions.module,v 1.20 2011/01/14 12:56:12 helmo Exp $
+
+/**
+ * Implementation of hook_menu().
+ */
+function project_git_instructions_menu() {
+  $items = array();
+
+  $items['node/%node/git-instructions'] = array(
+    'title' => t('Git instructions'),
+    'access callback' => 'project_git_instructions_visibility',
+    'access arguments' => array(1),
+    'page callback' => 'project_git_instructions_project_tab',
+    'page arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function project_git_instructions_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+  if ($node->type == 'project_project') {
+    $src = 'node/' . $node->nid . '/git-instructions';
+    if ($op == 'delete') {
+      db_query('DELETE FROM {url_alias} WHERE src = "%s"', $src);
+    }
+    elseif (($op == 'update' || $op == 'insert') && !empty($node->project['uri'])) {
+      $dst = 'project/' . drupal_urlencode($node->project['uri']) . '/git-instructions';
+      db_query('DELETE FROM {url_alias} WHERE src = "%s"', $src);
+      db_query('INSERT INTO {url_alias} (src, dst) VALUES ("%s", "%s")', $src, $dst);
+    }
+  }
+}
+
+/**
+ * Access callback to determin weather the Git intrsuctions tab should be visible.
+ */
+function project_git_instructions_visibility($node) {
+
+  // Check if we have a project node which has a Git repository
+  if ($node->type == 'project_project'
+    && !empty($node->versioncontrol_project['repo']->vcs)
+    && $node->versioncontrol_project['repo']->vcs == 'git') {
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Produce html code for the instructions tab.
+ */
+function project_git_instructions_project_tab($node, $version = NULL) {
+  $content = array();
+
+  $content[] = t('<p>This page gives the essential Git commands for working with this project\'s source files.</p>');
+
+  $content[] = drupal_get_form('project_git_instructions_version_picker_form', $node, $version);
+
+  if ($version) {
+    $content[] = project_git_instructions_checkout($node, $version);
+  }
+
+  return implode("\n", $content);
+}
+
+/**
+ * Produce project/version specific instructions.
+ */
+function project_git_instructions_checkout($project, $version) {
+  $content = array();
+
+  global $user;
+
+  $is_maintainer = project_git_instructions_version_is_privileged($project, $user);
+
+  if ($is_maintainer) {
+    $git_user = strstr($user->name, ' ') ? "'$user->name'" : $user->name;
+    if (arg(4) == 'anonymous') {
+      $is_maintainer = FALSE;
+    }
+  }
+
+  $dir = check_plain(drupal_urlencode($project->project['uri'])) . '-' . check_plain($version);
+  $project_url_name = check_plain(drupal_urlencode($project->project['uri'] . '.git'));
+  $git_user = check_plain($git_user);
+
+  $git_repository_hostname = variable_get('git_repository_hostname', 'git.drupal.org');
+
+  $content[] = '<p><strong style="color: red;">Warning:</strong> The migration of Drupal.org from CVS to Git is not complete yet, Git repositories are therefore READ-ONLY</p>';
+  $content[] = '<p><strong style="color: red;">Warning:</strong> This page is under development, the instructions might not be complete/correct.</p>';
+  $content[] = '<p><strong style="color: red;">Warning:</strong> This page is a new tool to help Drupal.org developers and themers more easily use Git.
+    The instructions may not be correct for every project. Please <a href="http://drupal.org/project/issues/project_git_instructions">review and post issues</a> if you find any problems.
+    The <a href="http://drupal.org/handbook/git">Git handbook</a> continues to be a primary reference.</p>';
+
+  $branch = check_plain($version);
+
+  $content[] = '<h3>Setting up Git</h3>';
+  $content[] = '<ol>';
+
+  // TODO create URL alias
+  $content[] = '<li><a href="http://drupal.org/handbook/git/clients">Install a Git client.</a></li>';
+  $content[] = '<li>Read a Git tutorial. (One is usually linked from the client installation handbook page you used.)</a></li>';
+  $content[] = '</ol>';
+
+  if ($is_maintainer) {
+    $content[] = '<h3>Getting a development copy as a maintainer</h3>';
+    $content[] = '<ol>';
+    $content[] = '<li>Download the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git clone --branch ' . $branch . ' ' . $git_user . '@' . $git_repository_hostname . '/project/' . $project_url_name . '</code></div></li>';
+  }
+  else {
+    $content[] = '<h3>Getting a development copy as a non-maintainer</h3>';
+    $content[] = '<ol>';
+    $content[] = '<li>Download the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git clone --branch ' . $branch . ' git://' . $git_repository_hostname . '/project/' . $project_url_name . '</code></div></li>';
+  }
+
+  if ($is_maintainer) {
+    $content[] = '<h3>Uploading changes as a maintainer</h3>';
+    $content[] = '<ol>';
+    $content[] = '<li>From within the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git add [changed files]</code></div></li>';
+    $content[] = '<li>From within the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git commit -m &quot;[issue category] #[issue number] by [comma-separated usernames]: [Short summary of the change].&quot;</code></div></li>';
+    $content[] = '<li>Review your local changes:<br />';
+    $content[] = '<div class="codeblock"><code>git diff origin/' . $branch . '</code></div></li>';
+    $content[] = '<li>Push the changes to Drupal.org:<br />';
+    $content[] = '<div class="codeblock"><code>git push origin ' . $branch . '</code></div></li>';
+    $content[] = '</ol>';
+  }
+
+  $content[] = '<h3>Updating the development copy from the drupal.org server</h3>';
+  $content[] = '<ol>';
+  $content[] = '<li>From within the development copy:<br />';
+
+  // @todo why not git pull --rebase?
+  $content[] = '<div class="codeblock"><code>git fetch origin<br />git rebase origin/' . $branch . '</code></div></li>';
+  $content[] = '</ol>';
+
+  $content[] = '<h3>Creating a patch</h3>';
+  $content[] = '<ol>';
+  $content[] = '<li>From within the development copy for uncommitted work:<br />';
+  $content[] = '<div class="codeblock"><code>git diff  > ~/' . check_plain($project->project['uri']) . '-[issue-number].patch</code></div></li>';
+
+  $content[] = '<li>From within the development copy for locally committed changes:<br />';
+  $content[] = '<div class="codeblock"><code>git format-patch origin</code></div></li>';
+  $content[] = '</ol>';
+
+  if ($is_maintainer) {
+    /*
+    $content[] = '<h3>Creating a new major version (branching)</h3>';
+    $content[] = '<ol>';
+    // TODO review link
+    $content[] = '<li>Review the handbook page on <a href="http://drupal.org/handbook/git/quickstart#branch-tag">branching and tagging</a>.</li>';
+    $content[] = '<li>From within the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git tag -b [branch name]</code></div></li>';
+    $content[] = '</ol>';
+     */
+    $content[] = '<h3>Creating a release (tagging)</h3>';
+    $content[] = '<ol>';
+    // TODO review link
+    $content[] = '<li>Review the handbook page on <a href="http://drupal.org/handbook/git/quickstart#branch-tag">branching and tagging</a>.</li>';
+    $content[] = '<li>From within the development copy:<br />';
+
+    // @todo: can we think of a smarter example tag name?
+    $new_tag = preg_replace('/x$/', '2',  $version);
+    // pre-release version (unstable, beta or release candidate)
+    $content[] = '<div class="codeblock"><code>git tag ' . check_plain($new_tag) . '-[pre-release suffix] </code></div>';
+    $content[] = '<strong>Note:</strong> a pre-release suffix can be something like unstable1, beta2 or rc1.</li>';
+
+    $content[] = '<li>From within the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git push origin tag ' . check_plain($new_tag) . '-[pre-release suffix] </code></div></li>';
+    $content[] = '<li><a href="' . url('node/add/project-release/' . $project->nid) . '">Configure the release.</a></li>';
+    $content[] = '</ol>';
+
+/*
+    $content[] = '<h3>Deleting a tag or branch</h3>';
+    $content[] = '<ol>';
+    $content[] = '<li>From within the development copy:<br />';
+    $content[] = '<div class="codeblock"><code>git tag -d [tag name]</code></div></li>';
+    $content[] = '</ol>';
+*/
+  }
+
+  $content[] = '<h3>Further reading</h3>';
+  $content[] = '<ol>';
+  $content[] = '<li>Handbook pages on <a href="http://drupal.org/handbook/git">drupal.org/handbook/git</a>.</li>';
+  $content[] = '</ol>';
+
+  return implode("\n", $content);
+}
+
+/**
+ * Prepare a form API array to select a specific module version
+ */
+function project_git_instructions_version_picker_form(&$form_state, $project, $version = NULL) {
+  $versions = array();
+
+  $repo = $project->versioncontrol_project['repo'];
+
+  $versions = array();
+  if ($repo instanceof VersioncontrolGitRepository) {
+    $branches = $repo->loadBranches();
+    foreach ($branches as $branch) {
+      $versions[$branch->name] = $branch->name;
+    }
+  }
+  else {
+    drupal_set_message(t('No valid git repository found for the given project.'), 'error', FALSE);
+  }
+
+  // Fallback code, incase no repository is available
+  if (empty($versions)) {
+    drupal_set_message(t('Repository could not be loaded, branch data is just an example.'));
+    $versions = array(
+      '6.x-1.x' => '6.x-1.x',
+      '6.x-2.x' => '6.x-2.x',
+      '7.x-1.x' => '7.x-1.x',
+    );
+  }
+
+  $form = array(
+    '#prefix' => '<div class="container-inline">',
+    '#suffix' => '</div>',
+  );
+
+  $form['nid'] = array(
+    '#type' => 'hidden',
+    '#value' => $project->nid,
+  );
+
+  $form['version_picker'] = array(
+    '#type' => 'fieldset',
+  );
+
+  $form['version_picker']['version'] = array(
+    '#type' => 'select',
+    '#title' => t('Version to work from'),
+    '#options' => $versions,
+    '#required' => TRUE,
+    '#default_value' => $version,
+  );
+
+  // TODO possibly add a tooltip like t('Show instructions for anonymous usage')
+  $form['version_picker']['anon'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Anonymous'),
+    '#default_value' => (arg(4) == 'anonymous' ? TRUE : FALSE),
+  );
+
+  $form['version_picker'][] = array(
+    '#type' => 'submit',
+    '#value' => t('Show'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submit function to redirect the form submit to the correct instructions page.
+ */
+function project_git_instructions_version_picker_form_submit($form, &$form_state) {
+  $form_state['redirect'] = 'node/' . $form_state['values']['nid'] . '/git-instructions/' . drupal_urlencode($form_state['values']['version']);
+  if ($form_state['values']['anon'] == 1) {
+    $form_state['redirect'] .= '/anonymous';
+  }
+}
+
+/**
+ * Helper fuction to determin if the current user is privileged for this project.
+ *
+ * @param $project The project name
+ * @return boolean Weather the current user is privileged
+ */
+function project_git_instructions_version_is_privileged($project, $account = NULL) {
+  if (is_null($account)) {
+    global $user;
+    $account = $user;
+  }
+
+  $repo = $project->versioncontrol_project['repo'];
+
+  if (!$repo instanceof VersioncontrolGitRepository) {
+    // Couldn't find a git repo on this project, so definitely a no-go.
+    return FALSE;
+  }
+
+  return $repo->getAuthHandler()->authAccess($account->uid);
+}
+
